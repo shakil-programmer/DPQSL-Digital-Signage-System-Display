@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DPQSL Digital Signage Display</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="DPQSL Signage">
+<link rel="apple-touch-icon" href="logo-1.png">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --accent: #4f7cff;
+    --green: #00d4aa;
+  }
+
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #000; color: #e8eaf6;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    cursor: none;
+  }
+
+  /* ── STAGE ── */
+  #stage { position: fixed; inset: 0; z-index: 1; }
+
+  .slide-layer {
+    position: absolute; inset: 0;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+  .slide-layer.visible { opacity: 1; }
+
+  .slide-layer img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain; display: block;
+  }
+
+  .slide-layer iframe {
+    width: 100%; height: 100%; border: none; display: block;
+  }
+
+  /* TEXT SLIDE */
+  .text-slide {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    padding: 80px; text-align: center;
+    word-break: break-word; line-height: 1.35; font-weight: 700;
+  }
+
+  /* AUDIO SLIDE */
+  .audio-slide {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #07070f; gap: 28px;
+  }
+  .audio-title { font-size: 32px; font-weight: 700; color: #e8eaf6; letter-spacing: 1px; }
+  .audio-sub { font-size: 15px; color: rgba(232,234,246,.5); }
+  .waveform { display: flex; align-items: center; gap: 5px; height: 90px; }
+  .wave-bar {
+    width: 5px; border-radius: 3px;
+    background: linear-gradient(to top, var(--accent), var(--green));
+    animation: waveBounce var(--spd, .8s) ease-in-out infinite alternate;
+    animation-delay: var(--dly, 0s);
+  }
+  @keyframes waveBounce {
+    from { height: 5px; opacity: .4; }
+    to { height: var(--pk, 60px); opacity: 1; }
+  }
+  .audio-iframe { display: none; }
+
+  /* ── HUD ── */
+  #hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+
+  /* Clock — small, one line */
+  #clock {
+    position: absolute; top: 4px; left: 4px;
+    font-size: 13px; font-weight: 600;
+    color: rgba(255,255,255,.75);
+    text-shadow: 0 1px 6px rgba(0,0,0,.9);
+    background: rgba(0,0,0,.35);
+    padding: 5px 12px; border-radius: 20px;
+    backdrop-filter: blur(6px);
+    white-space: nowrap;
+  }
+
+  #slideCounter {
+    position: absolute; top: 14px; right: 18px;
+    font-size: 13px; font-weight: 600;
+    color: rgba(255,255,255,.7);
+    text-shadow: 0 1px 6px rgba(0,0,0,.8);
+    background: rgba(0,0,0,.35); padding: 5px 12px; border-radius: 20px;
+    backdrop-filter: blur(6px);
+  }
+
+  #watermark {
+    position: absolute; bottom: 50px; right: 16px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    color: rgba(255,255,255,.18); text-transform: uppercase;
+  }
+
+  /* ── PROGRESS BAR ── */
+  #progressBar {
+    position: fixed; bottom: 32px; left: 0; right: 0; height: 3px; z-index: 20;
+    background: rgba(255,255,255,.08);
+  }
+  #progressFill {
+    height: 100%; width: 0%;
+    background: linear-gradient(to right, var(--accent), var(--green));
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  /* ── TICKER ── */
+  #tickerBar {
+    position: fixed; bottom: 0; left: 0; right: 0; height: 32px;
+    z-index: 30; display: flex; align-items: center; overflow: hidden;
+  }
+  .ticker-inner {
+    display: inline-flex; white-space: nowrap;
+    font-size: 14px; font-weight: 600; letter-spacing: .3px;
+    will-change: transform;
+  }
+
+  /* ── OVERLAYS ── */
+  .overlay {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,.88);
+    backdrop-filter: blur(8px);
+    gap: 16px;
+    transition: opacity .4s ease;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  .overlay-icon { font-size: 60px; }
+  .overlay-title { font-size: 22px; font-weight: 700; }
+  .overlay-sub { font-size: 13px; color: rgba(232,234,246,.5); text-align: center; max-width: 320px; line-height: 1.6; }
+
+  .spinner {
+    width: 42px; height: 42px;
+    border: 3px solid rgba(79,124,255,.2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #pausedOverlay .overlay-icon { animation: pulseFade 2s ease-in-out infinite; }
+  @keyframes pulseFade { 0%,100%{opacity:1}50%{opacity:.25} }
+
+  /* ── PWA INSTALL POPUP ── */
+  #installPopup {
+    position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 100;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid rgba(79,124,255,0.35);
+    border-radius: 20px;
+    padding: 20px 24px;
+    width: min(360px, 90vw);
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(79,124,255,0.1);
+    backdrop-filter: blur(12px);
+    cursor: auto;
+    animation: slideUp 0.4s cubic-bezier(.34,1.56,.64,1);
+  }
+  #installPopup.hidden { display: none; }
+  @keyframes slideUp {
+    from { transform: translateX(-50%) translateY(30px); opacity: 0; }
+    to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+  }
+  #installPopup .pwa-logo {
+    width: 64px; height: 64px;
+    border-radius: 16px;
+    object-fit: contain;
+    background: #fff;
+    padding: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  #installPopup .pwa-title {
+    font-size: 16px; font-weight: 700;
+    color: #e8eaf6; text-align: center; letter-spacing: 0.3px;
+  }
+  #installPopup .pwa-sub {
+    font-size: 12px; color: rgba(232,234,246,0.5);
+    text-align: center; line-height: 1.5; max-width: 280px;
+  }
+  #installPopup .pwa-buttons {
+    display: flex; gap: 10px; width: 100%; margin-top: 4px;
+  }
+  #installPopup .btn-install {
+    flex: 1;
+    background: linear-gradient(135deg, var(--accent), #7b5ea7);
+    color: #fff; border: none;
+    padding: 11px 0; border-radius: 12px;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer; letter-spacing: 0.3px;
+    transition: opacity .2s, transform .1s;
+    pointer-events: auto;
+  }
+  #installPopup .btn-install:active { transform: scale(.97); opacity: .85; }
+  #installPopup .btn-dismiss {
+    flex: 0 0 auto;
+    background: rgba(255,255,255,0.08);
+    color: rgba(232,234,246,0.6);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 11px 16px; border-radius: 12px;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    transition: background .2s;
+    pointer-events: auto;
+  }
+  #installPopup .btn-dismiss:hover { background: rgba(255,255,255,0.13); }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div id="hud">
+  <div id="clock">—</div>
+  <div id="slideCounter">— / —</div>
+  <div id="watermark">DPQSL Signage</div>
+</div>
+
+<div id="progressBar"><div id="progressFill"></div></div>
+
+<div id="tickerBar" style="display:none">
+  <div class="ticker-inner" id="tickerInner"></div>
+</div>
+
+<div class="overlay" id="connectingOverlay">
+  <div class="spinner"></div>
+  <div class="overlay-title">Connecting…</div>
+  <div class="overlay-sub">Waiting for Firebase Realtime Database</div>
+</div>
+
+<div class="overlay hidden" id="pausedOverlay">
+  <div class="overlay-icon">⏸</div>
+  <div class="overlay-title">Paused</div>
+  <div class="overlay-sub">Waiting for play command from Control Panel</div>
+</div>
+
+<!-- PWA Install Popup -->
+<div id="installPopup" class="hidden">
+  <img class="pwa-logo" src="logo-1.png" alt="DPQSL Logo">
+  <div class="pwa-title">📲 Install as Mobile App</div>
+  <div class="pwa-sub">DPQSL Signage Display আপনার phone-এ app হিসেবে install করুন — যেকোনো সময় এক ক্লিকে খুলবে।</div>
+  <div class="pwa-buttons">
+    <button class="btn-install" id="btnInstall">⬇ Install</button>
+    <button class="btn-dismiss" id="btnDismiss">পরে করব</button>
+  </div>
+</div>
+
+<div class="overlay hidden" id="emptyOverlay" style="background:#0f1117">
+  <div class="overlay-icon">📺</div>
+  <div class="overlay-title">No Content</div>
+  <div class="overlay-sub">Open the Control Panel, add slides, and click "Push to Display".</div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBdpi-S7jAJgXuCiDEv6ZSde3uUYabmzBQ",
+  authDomain: "dpqsl-signage-16a30.firebaseapp.com",
+  databaseURL: "https://dpqsl-signage-16a30-default-rtdb.firebaseio.com",
+  projectId: "dpqsl-signage-16a30",
+  storageBucket: "dpqsl-signage-16a30.firebasestorage.app",
+  messagingSenderId: "579743744769",
+  appId: "1:579743744769:web:857c831182df6f9ecbd100"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// ── STATE ──
+let slides = [];
+let currentIndex = 0;
+let loopEnabled = true;
+let isPaused = false;
+let slideTimer = null;          
+let progressRAF = null;         
+let progressStartTime = null;
+let progressDuration = 0;
+let activeLayerEl = null;
+let lastControlTs = 0;
+let lastSlidesJson = ""; 
+let currentTickerJson = "";
+
+// ── CLOCK ──
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function updateClock() {
+  const now = new Date();
+  const day = DAYS[now.getDay()];
+  const date = now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+  const time = now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  document.getElementById('clock').textContent = `${day}, ${date}  ||  ${time}`;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── FIREBASE ──
+onValue(ref(db, 'signage/config'), snap => {
+  const data = snap.val();
+  hide('connectingOverlay');
+
+  if (!data || !data.slides || data.slides.length === 0) {
+    slides = [];
+    lastSlidesJson = "";
+    currentTickerJson = "";
+    show('emptyOverlay'); 
+    clearSlideTimer(); 
+    stopProgress();
+    if(activeLayerEl) activeLayerEl.innerHTML = '';
+    return;
+  }
+  hide('emptyOverlay');
+
+  const currentSlidesJson = JSON.stringify(data.slides);
+  const slidesChanged = currentSlidesJson !== lastSlidesJson;
+  
+  slides = data.slides;
+  loopEnabled = data.loop !== false;
+
+  const tickerJsonStr = JSON.stringify(data.ticker);
+  if (tickerJsonStr !== currentTickerJson) {
+    currentTickerJson = tickerJsonStr;
+    applyTicker(data.ticker);
+  }
+
+  if (slidesChanged) {
+    lastSlidesJson = currentSlidesJson;
+    currentIndex = 0;
+    isPaused = false;
+    hide('pausedOverlay');
+    goToSlide(currentIndex);
+  }
+});
+
+onValue(ref(db, 'signage/control'), snap => {
+  const data = snap.val();
+  if (!data || data.ts === lastControlTs) return;
+  lastControlTs = data.ts;
+  handleCommand(data.command);
+});
+
+function handleCommand(cmd) {
+  switch (cmd) {
+    case 'play':
+      if (isPaused) {
+        isPaused = false;
+        hide('pausedOverlay');
+        goToSlide(currentIndex);
+      }
+      break;
+    case 'pause':
+      isPaused = true;
+      clearSlideTimer();
+      stopProgress();
+      show('pausedOverlay');
+      break;
+    case 'next':
+      manualAdvance(1);
+      break;
+    case 'prev':
+      manualAdvance(-1);
+      break;
+    case 'restart':
+      isPaused = false;
+      hide('pausedOverlay');
+      currentIndex = 0;
+      goToSlide(currentIndex);
+      break;
+  }
+}
+
+// ── SLIDE NAVIGATION ──
+function goToSlide(index) {
+  if (!slides.length) return;
+
+  if (index < 0) index = loopEnabled ? slides.length - 1 : 0;
+  if (index >= slides.length) index = loopEnabled ? 0 : slides.length - 1;
+  currentIndex = index;
+
+  const slide = slides[currentIndex];
+  updateCounter();
+  renderSlide(slide);
+
+  clearSlideTimer();
+  if (!isPaused) {
+    const ms = (slide.duration || 10) * 1000;
+    startProgress(ms);
+    slideTimer = setTimeout(() => {
+      if (!isPaused) advance();
+    }, ms);
+  }
+}
+
+function advance() {
+  let next = currentIndex + 1;
+  if (next >= slides.length) {
+    if (loopEnabled) next = 0;
+    else { stopProgress(); return; } 
+  }
+  goToSlide(next);
+}
+
+function manualAdvance(dir) {
+  isPaused = false;
+  hide('pausedOverlay');
+  clearSlideTimer();
+  stopProgress();
+  let next = currentIndex + dir;
+  if (next < 0) next = loopEnabled ? slides.length - 1 : 0;
+  if (next >= slides.length) next = loopEnabled ? 0 : slides.length - 1;
+  goToSlide(next);
+}
+
+function clearSlideTimer() {
+  if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+}
+
+// ── RENDER SLIDE ──
+const stage = document.getElementById('stage');
+
+function renderSlide(slide) {
+  const newEl = document.createElement('div');
+  newEl.className = 'slide-layer';
+  newEl.appendChild(buildContent(slide));
+  stage.appendChild(newEl);
+
+  requestAnimationFrame(() => requestAnimationFrame(() => newEl.classList.add('visible')));
+
+  if (activeLayerEl) {
+    const old = activeLayerEl;
+    old.classList.remove('visible');
+    setTimeout(() => { if (old.parentNode) old.parentNode.removeChild(old); }, 700);
+  }
+  activeLayerEl = newEl;
+}
+
+function buildContent(slide) {
+  const frag = document.createDocumentFragment();
+
+  if (slide.type === 'image') {
+    const img = document.createElement('img');
+    img.src = slide.src; img.alt = slide.name;
+    frag.appendChild(img);
+
+  } else if (slide.type === 'video') {
+    const iframe = document.createElement('iframe');
+    iframe.src = slide.src;
+    iframe.allow = 'autoplay; fullscreen';
+    iframe.setAttribute('allowfullscreen', '');
+    frag.appendChild(iframe);
+
+  } else if (slide.type === 'pdf') {
+    const iframe = document.createElement('iframe');
+    iframe.src = slide.src;
+    frag.appendChild(iframe);
+
+  } else if (slide.type === 'text') {
+    const div = document.createElement('div');
+    div.className = 'text-slide';
+    div.style.background = slide.bg || '#0f1117';
+    div.style.color = slide.color || '#ffffff';
+    div.style.fontSize = (slide.size || 48) + 'px';
+    div.textContent = slide.content;
+    frag.appendChild(div);
+
+  } else if (slide.type === 'web' || slide.type === 'excel') {
+    /*
+     * REQ-1 FIX: Full interactive access for web URLs
+     * - sandbox সরিয়ে দেওয়া হয়েছে যাতে date picker, calendar,
+     *   form submit সবকিছু কাজ করে
+     * - allow-same-origin ছাড়া cookies/localStorage কাজ করে না,
+     *   sandbox সম্পূর্ণ বাদ দিলে সব restriction উঠে যায়
+     * - pointer-events: auto রাখা হয়েছে যাতে mouse/touch সব কাজ করে
+     */
+    const iframe = document.createElement('iframe');
+    iframe.src = slide.src;
+    // sandbox একদম remove — full access দেওয়ার জন্য
+    iframe.style.pointerEvents = 'auto';
+    iframe.setAttribute('allow', 'clipboard-write; fullscreen; clipboard-read');
+    frag.appendChild(iframe);
+
+  } else if (slide.type === 'audio') {
+    const div = document.createElement('div');
+    div.className = 'audio-slide';
+
+    const title = document.createElement('div');
+    title.className = 'audio-title';
+    title.textContent = slide.title || 'Now Playing';
+
+    const waveform = document.createElement('div');
+    waveform.className = 'waveform';
+    for (let i = 0; i < 36; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'wave-bar';
+      bar.style.setProperty('--pk', (15 + Math.random() * 65) + 'px');
+      bar.style.setProperty('--spd', (0.35 + Math.random() * 0.75) + 's');
+      bar.style.setProperty('--dly', (Math.random() * 0.5) + 's');
+      waveform.appendChild(bar);
+    }
+
+    const sub = document.createElement('div');
+    sub.className = 'audio-sub';
+    sub.textContent = slide.name;
+
+    const audioIframe = document.createElement('iframe');
+    audioIframe.className = 'audio-iframe';
+    audioIframe.src = slide.src;
+    audioIframe.allow = 'autoplay';
+
+    div.appendChild(title);
+    div.appendChild(waveform);
+    div.appendChild(sub);
+    div.appendChild(audioIframe);
+    frag.appendChild(div);
+  }
+
+  return frag;
+}
+
+// ── PROGRESS BAR ──
+function startProgress(duration) {
+  stopProgress();
+  progressDuration = duration;
+  progressStartTime = performance.now();
+  const fill = document.getElementById('progressFill');
+  fill.style.width = '0%';
+
+  function tick(now) {
+    const elapsed = now - progressStartTime;
+    const pct = Math.min(100, (elapsed / progressDuration) * 100);
+    fill.style.width = pct + '%';
+    if (pct < 100) progressRAF = requestAnimationFrame(tick);
+  }
+  progressRAF = requestAnimationFrame(tick);
+}
+
+// ── COUNTER ──
+function updateCounter() {
+  document.getElementById('slideCounter').textContent = `${currentIndex + 1} / ${slides.length}`;
+}
+
+function stopProgress() {
+  if (progressRAF) { cancelAnimationFrame(progressRAF); progressRAF = null; }
+  document.getElementById('progressFill').style.width = '0%';
+}
+
+// ── TICKER ──
+let tickerRAF = null;
+let tickerPos = 0;
+let tickerSpeed = 1;
+let tickerContentWidth = 0;
+
+function applyTicker(ticker) {
+  const bar = document.getElementById('tickerBar');
+  const inner = document.getElementById('tickerInner');
+
+  if (tickerRAF) { cancelAnimationFrame(tickerRAF); tickerRAF = null; }
+
+  if (!ticker || !ticker.enabled || !ticker.text) {
+    bar.style.display = 'none'; return;
+  }
+
+  bar.style.display = 'flex';
+  bar.style.background = ticker.bg || '#1a237e';
+  inner.style.color = ticker.color || '#ffffff';
+
+  const sep = '     ◆     ';
+  const repeated = (ticker.text + sep).repeat(6);
+  inner.textContent = repeated + repeated;
+
+  const speedMap = [0.15, 0.4, 0.8, 1.6, 2.8];
+  tickerSpeed = speedMap[(ticker.speed || 3) - 1];
+  tickerPos = 0;
+
+  requestAnimationFrame(() => {
+    tickerContentWidth = inner.scrollWidth / 2; 
+    inner.style.transform = 'translateX(0px)';
+    function animateTicker() {
+      tickerPos -= tickerSpeed;
+      if (Math.abs(tickerPos) >= tickerContentWidth) tickerPos = 0;
+      inner.style.transform = `translateX(${tickerPos}px)`;
+      tickerRAF = requestAnimationFrame(animateTicker);
+    }
+    tickerRAF = requestAnimationFrame(animateTicker);
+  });
+}
+
+// ── OVERLAYS ──
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ── KEYBOARD ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') manualAdvance(1);
+  else if (e.key === 'ArrowLeft') manualAdvance(-1);
+  else if (e.key === 'f' || e.key === 'F') toggleFS();
+});
+document.addEventListener('dblclick', toggleFS);
+document.addEventListener('click', () => { if (!document.fullscreenElement) toggleFS(); });
+
+function toggleFS() {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+  else document.exitFullscreen().catch(()=>{});
+}
+
+// ── PWA INSTALL PROMPT (REQ-2 & REQ-3 FIX) ──
+// localStorage ব্যবহার করা হয়েছে — permanently "installed" বা "dismissed" track করার জন্য
+// sessionStorage ব্যবহার করলে browser বন্ধ করলে reset হয়ে যেত
+let deferredInstallPrompt = null;
+const installPopup = document.getElementById('installPopup');
+const btnInstall   = document.getElementById('btnInstall');
+const btnDismiss   = document.getElementById('btnDismiss');
+
+// Check: আগে install হয়ে গেছে কিনা (standalone mode = installed PWA)
+function isAlreadyInstalled() {
+  return (
+    window.navigator.standalone === true ||              // iOS installed
+    window.matchMedia('(display-mode: standalone)').matches || // Android/desktop installed
+    localStorage.getItem('pwa_installed') === '1'
+  );
+}
+
+// Check: user আগে permanently dismiss করেছে কিনা
+function isDismissedPermanently() {
+  return localStorage.getItem('pwa_permanently_dismissed') === '1';
+}
+
+function showInstallPopup() {
+  if (isAlreadyInstalled() || isDismissedPermanently()) return;
+  installPopup.classList.remove('hidden');
+}
+
+// Android Chrome / Edge: beforeinstallprompt event
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  // App already installed হলে দেখাবো না
+  if (!isAlreadyInstalled() && !isDismissedPermanently()) {
+    setTimeout(showInstallPopup, 2500);
+  }
+});
+
+// App installed হলে flag set করো
+window.addEventListener('appinstalled', () => {
+  localStorage.setItem('pwa_installed', '1');
+  installPopup.classList.add('hidden');
+  deferredInstallPrompt = null;
+});
+
+// Install button
+btnInstall.addEventListener('click', async () => {
+  installPopup.classList.add('hidden');
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') {
+      localStorage.setItem('pwa_installed', '1');
+    }
+    deferredInstallPrompt = null;
+  } else {
+    // iOS Safari fallback
+    alert('iOS এ install করতে:\nSafari → Share বাটন (□↑) → "Add to Home Screen" select করুন।');
+  }
+});
+
+// Dismiss button — permanently dismiss, আর কখনো দেখাবে না
+btnDismiss.addEventListener('click', () => {
+  installPopup.classList.add('hidden');
+  localStorage.setItem('pwa_permanently_dismissed', '1');
+});
+
+// iOS Safari detection (beforeinstallprompt fire হয় না iOS-এ)
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isInStandaloneMode = window.navigator.standalone === true;
+if (isIOS && !isInStandaloneMode && !isDismissedPermanently()) {
+  setTimeout(showInstallPopup, 2500);
+}
+</script>
+</body>
+</html>
