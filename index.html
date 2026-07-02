@@ -53,6 +53,7 @@
     display: flex; align-items: center; justify-content: center;
     padding: 80px; text-align: center;
     word-break: break-word; line-height: 1.35; font-weight: 700;
+    white-space: pre-line;
   }
 
   /* AUDIO SLIDE */
@@ -443,11 +444,10 @@ function renderSlide(slide) {
     newEl.classList.add('visible');
     mediaForThisSlide.forEach(el => {
       if (unlockedAudio) el.muted = false;
-      el.play().catch(() => {
-        // Autoplay blocked (needs a user tap first) — will retry on next screen tap.
-      });
+      attemptPlay(el);
     });
     if (unlockedAudio) framesForThisSlide.forEach(unmuteEmbedFrame);
+    else framesForThisSlide.forEach(el => setTimeout(() => unmuteEmbedFrame(el), 800)); // best-effort early unmute try
   }));
 
   if (activeLayerEl) {
@@ -456,6 +456,18 @@ function renderSlide(slide) {
     setTimeout(() => { if (old.parentNode) old.parentNode.removeChild(old); }, 700);
   }
   activeLayerEl = newEl;
+}
+
+// Try to autoplay with sound; if the browser blocks it, fall back to a muted
+// autoplay so the slide still moves, and mark it to unmute on the next screen tap.
+function attemptPlay(el) {
+  const p = el.play();
+  if (p && p.catch) {
+    p.catch(() => {
+      el.muted = true;
+      el.play().catch(() => {});
+    });
+  }
 }
 
 let pendingMedia = [];
@@ -487,7 +499,6 @@ function buildContent(slide) {
       const video = document.createElement('video');
       video.src = slide.src;
       video.autoplay = true;
-      video.muted = true;          // required by browser autoplay policy
       video.loop = true;           // keep playing if slide duration is longer than the clip
       video.playsInline = true;
       video.setAttribute('playsinline', '');
