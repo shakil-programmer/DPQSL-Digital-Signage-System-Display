@@ -52,7 +52,6 @@
     width: 100%; height: 100%;
     display: flex; align-items: center; justify-content: center;
     padding: 80px; text-align: center;
-    white-space: pre-wrap !important;
     word-break: break-word; line-height: 1.35; font-weight: 700;
   }
 
@@ -438,7 +437,18 @@ function renderSlide(slide) {
   newEl.appendChild(buildContent(slide));
   stage.appendChild(newEl);
 
-  requestAnimationFrame(() => requestAnimationFrame(() => newEl.classList.add('visible')));
+  const mediaForThisSlide = pendingMedia;
+  const framesForThisSlide = pendingEmbedFrames;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    newEl.classList.add('visible');
+    mediaForThisSlide.forEach(el => {
+      if (unlockedAudio) el.muted = false;
+      el.play().catch(() => {
+        // Autoplay blocked (needs a user tap first) — will retry on next screen tap.
+      });
+    });
+    if (unlockedAudio) framesForThisSlide.forEach(unmuteEmbedFrame);
+  }));
 
   if (activeLayerEl) {
     const old = activeLayerEl;
@@ -448,8 +458,14 @@ function renderSlide(slide) {
   activeLayerEl = newEl;
 }
 
+let pendingMedia = [];
+let pendingEmbedFrames = [];
+let unlockedAudio = false;
+
 function buildContent(slide) {
   const frag = document.createDocumentFragment();
+  pendingMedia = [];
+  pendingEmbedFrames = [];
 
   if (slide.type === 'image') {
     const img = document.createElement('img');
@@ -457,11 +473,30 @@ function buildContent(slide) {
     frag.appendChild(img);
 
   } else if (slide.type === 'video') {
-    const iframe = document.createElement('iframe');
-    iframe.src = slide.src;
-    iframe.allow = 'autoplay; fullscreen';
-    iframe.setAttribute('allowfullscreen', '');
-    frag.appendChild(iframe);
+    const isEmbeddable = slide.isEmbed || /youtube\.com\/embed|player\.vimeo\.com|drive\.google\.com\/file/.test(slide.src || '');
+    if (isEmbeddable) {
+      const iframe = document.createElement('iframe');
+      iframe.src = slide.src;
+      iframe.allow = 'autoplay; fullscreen';
+      iframe.setAttribute('allowfullscreen', '');
+      iframe.dataset.embedPlayer = 'true';
+      pendingEmbedFrames.push(iframe);
+      frag.appendChild(iframe);
+    } else {
+      // Direct video file or uploaded file (data: URI) — iframe can't play these, use <video>
+      const video = document.createElement('video');
+      video.src = slide.src;
+      video.autoplay = true;
+      video.muted = true;          // required by browser autoplay policy
+      video.loop = true;           // keep playing if slide duration is longer than the clip
+      video.playsInline = true;
+      video.setAttribute('playsinline', '');
+      video.style.width = '100%';
+      video.style.height = '100%';
+      video.style.objectFit = 'contain';
+      pendingMedia.push(video);
+      frag.appendChild(video);
+    }
 
   } else if (slide.type === 'pdf') {
     const iframe = document.createElement('iframe');
@@ -477,21 +512,37 @@ function buildContent(slide) {
     div.textContent = slide.content;
     frag.appendChild(div);
 
-  } else if (slide.type === 'web' || slide.type === 'excel') {
-    /*
-     * REQ-1 FIX: Full interactive access for web URLs
-     * - sandbox সরিয়ে দেওয়া হয়েছে যাতে date picker, calendar,
-     *   form submit সবকিছু কাজ করে
-     * - allow-same-origin ছাড়া cookies/localStorage কাজ করে না,
-     *   sandbox সম্পূর্ণ বাদ দিলে সব restriction উঠে যায়
-     * - pointer-events: auto রাখা হয়েছে যাতে mouse/touch সব কাজ করে
-     */
-    const iframe = document.createElement('iframe');
-    iframe.src = slide.src;
-    // sandbox একদম remove — full access দেওয়ার জন্য
-    iframe.style.pointerEvents = 'auto';
-    iframe.setAttribute('allow', 'clipboard-write; fullscreen; clipboard-read');
-    frag.appendChild(iframe);
+  } else if (slide.type === 'web' || slide.type === 'excel' || slide.type === 'word') {
+    if (slide.src && slide.src.startsWith('data:')) {
+      // Uploaded Word/Excel files are raw base64 data — browsers have no built-in
+      // viewer for .doc/.docx/.xls/.xlsx, so there is nothing to render here.
+      // Real fix: upload the file to Firebase Storage and use its public URL with
+      // Google Docs Viewer / Office Online Viewer (see chat explanation).
+      const div = document.createElement('div');
+      div.className = 'text-slide';
+      div.style.background = '#0f1117';
+      div.style.color = '#ffb84f';
+      div.style.fontSize = '28px';
+      div.style.flexDirection = 'column';
+      div.style.gap = '10px';
+      div.innerHTML = `<div>⚠ Cannot preview "${slide.name}"</div><div style="font-size:16px;color:#7b82a8;">Uploaded ${slide.type} files need a public link (Google Docs/Sheets share link) to display here.</div>`;
+      frag.appendChild(div);
+    } else {
+      /*
+       * REQ-1 FIX: Full interactive access for web URLs
+       * - sandbox সরিয়ে দেওয়া হয়েছে যাতে date picker, calendar,
+       *   form submit সবকিছু কাজ করে
+       * - allow-same-origin ছাড়া cookies/localStorage কাজ করে না,
+       *   sandbox সম্পূর্ণ বাদ দিলে সব restriction উঠে যায়
+       * - pointer-events: auto রাখা হয়েছে যাতে mouse/touch সব কাজ করে
+       */
+      const iframe = document.createElement('iframe');
+      iframe.src = slide.type === 'word' ? `https://docs.google.com/viewer?url=${encodeURIComponent(slide.src)}&embedded=true` : slide.src;
+      // sandbox একদম remove — full access দেওয়ার জন্য
+      iframe.style.pointerEvents = 'auto';
+      iframe.setAttribute('allow', 'clipboard-write; fullscreen; clipboard-read');
+      frag.appendChild(iframe);
+    }
 
   } else if (slide.type === 'audio') {
     const div = document.createElement('div');
@@ -516,15 +567,16 @@ function buildContent(slide) {
     sub.className = 'audio-sub';
     sub.textContent = slide.name;
 
-    const audioIframe = document.createElement('iframe');
-    audioIframe.className = 'audio-iframe';
-    audioIframe.src = slide.src;
-    audioIframe.allow = 'autoplay';
+    const audio = document.createElement('audio');
+    audio.src = slide.src;
+    audio.autoplay = true;
+    audio.loop = true; // auto-replay if slide duration is longer than the audio clip
+    pendingMedia.push(audio);
 
     div.appendChild(title);
     div.appendChild(waveform);
     div.appendChild(sub);
-    div.appendChild(audioIframe);
+    div.appendChild(audio);
     frag.appendChild(div);
   }
 
@@ -610,7 +662,26 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'f' || e.key === 'F') toggleFS();
 });
 document.addEventListener('dblclick', toggleFS);
-document.addEventListener('click', () => { if (!document.fullscreenElement) toggleFS(); });
+function unmuteEmbedFrame(iframe) {
+  if (!iframe.contentWindow) return;
+  // YouTube IFrame API postMessage protocol — works without needing the JS API script loaded.
+  try {
+    iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*');
+    iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+  } catch (e) {}
+}
+
+document.addEventListener('click', () => {
+  if (!document.fullscreenElement) toggleFS();
+  if (!unlockedAudio) {
+    unlockedAudio = true;
+    stage.querySelectorAll('audio, video').forEach(el => {
+      el.muted = false;
+      el.play().catch(() => {});
+    });
+    stage.querySelectorAll('iframe[data-embed-player]').forEach(unmuteEmbedFrame);
+  }
+});
 
 function toggleFS() {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
