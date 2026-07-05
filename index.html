@@ -293,7 +293,6 @@ let progressStartTime = null;
 let progressDuration = 0;
 let activeLayerEl = null;
 let lastControlTs = 0;
-let lastSlidesJson = ""; 
 let currentTickerJson = "";
 
 // ── CLOCK ──
@@ -309,25 +308,31 @@ updateClock();
 setInterval(updateClock, 1000);
 
 // ── FIREBASE ──
+// NOTE: আগে এখানে JSON.stringify(data.slides) দিয়ে change-detect করা হতো, যেটা
+// slides এ বড় base64 ফাইল (image/video/audio upload) থাকলে খুব ভারী operation —
+// Android TV এর কম-শক্তির CPU তে এটাই freeze/stuck হওয়ার একটা বড় কারণ ছিল।
+// এখন control panel এর পাঠানো 'updatedAt' timestamp দিয়ে হালকা compare করা হচ্ছে।
+let lastUpdatedAt = 0;
+
 onValue(ref(db, 'signage/config'), snap => {
   const data = snap.val();
   hide('connectingOverlay');
 
   if (!data || !data.slides || data.slides.length === 0) {
     slides = [];
-    lastSlidesJson = "";
+    lastUpdatedAt = 0;
     currentTickerJson = "";
     show('emptyOverlay'); 
     clearSlideTimer(); 
     stopProgress();
-    if(activeLayerEl) activeLayerEl.innerHTML = '';
+    cleanupLayer(activeLayerEl);
+    activeLayerEl = null;
     return;
   }
   hide('emptyOverlay');
 
-  const currentSlidesJson = JSON.stringify(data.slides);
-  const slidesChanged = currentSlidesJson !== lastSlidesJson;
-  
+  const slidesChanged = data.updatedAt !== lastUpdatedAt;
+
   slides = data.slides;
   loopEnabled = data.loop !== false;
 
@@ -338,7 +343,7 @@ onValue(ref(db, 'signage/config'), snap => {
   }
 
   if (slidesChanged) {
-    lastSlidesJson = currentSlidesJson;
+    lastUpdatedAt = data.updatedAt;
     currentIndex = 0;
     isPaused = false;
     hide('pausedOverlay');
@@ -453,9 +458,25 @@ function renderSlide(slide) {
   if (activeLayerEl) {
     const old = activeLayerEl;
     old.classList.remove('visible');
-    setTimeout(() => { if (old.parentNode) old.parentNode.removeChild(old); }, 700);
+    setTimeout(() => cleanupLayer(old), 700);
   }
   activeLayerEl = newEl;
+}
+
+// পুরনো slide layer (video/audio/iframe সহ) সম্পূর্ণভাবে বন্ধ ও DOM থেকে সরানো হচ্ছে।
+// শুধু removeChild() করলে অনেক Android TV WebView-তে ভেতরের video/iframe network+memory
+// activity সাথে সাথে বন্ধ হয় না — এর ফলে বার বার push/loop করলে ধীরে ধীরে
+// memory জমে গিয়ে freeze/stuck হয়ে যায়। তাই remove করার আগে explicitly media pause
+// করে src ফাঁকা করে দেওয়া হচ্ছে।
+function cleanupLayer(el) {
+  if (!el) return;
+  el.querySelectorAll('video, audio').forEach(m => {
+    try { m.pause(); m.removeAttribute('src'); m.load(); } catch (e) {}
+  });
+  el.querySelectorAll('iframe').forEach(f => {
+    try { f.src = 'about:blank'; } catch (e) {}
+  });
+  if (el.parentNode) el.parentNode.removeChild(el);
 }
 
 // Try to autoplay with sound; if the browser blocks it, fall back to a muted
@@ -468,6 +489,28 @@ function attemptPlay(el) {
       el.play().catch(() => {});
     });
   }
+}
+
+// Converts a Google Slides link (edit / share / present) into its embeddable form.
+// Also handles links that are already "/embed" published links.
+function pptToEmbed(url) {
+  if (!url) return url;
+  // Already a Google Slides embed/pub link
+  if (/docs\.google\.com\/presentation/.test(url)) {
+    if (/\/embed/.test(url)) return url;
+    // Published "pub" link → append the loop/autoplay-friendly embed params
+    const m = url.match(/\/d\/e\/([a-zA-Z0-9_-]+)/) || url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) {
+      const isPubEmbed = /\/d\/e\//.test(url);
+      const base = isPubEmbed
+        ? `https://docs.google.com/presentation/d/e/${m[1]}/embed`
+        : `https://docs.google.com/presentation/d/${m[1]}/embed`;
+      return `${base}?start=true&loop=true&delayms=5000`;
+    }
+    return url;
+  }
+  // Any other public direct .pptx / .ppt link → use Microsoft Office Online Viewer
+  return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`;
 }
 
 let pendingMedia = [];
@@ -522,6 +565,29 @@ function buildContent(slide) {
     div.style.fontSize = (slide.size || 48) + 'px';
     div.textContent = slide.content;
     frag.appendChild(div);
+
+  } else if (slide.type === 'ppt') {
+    if (slide.src && slide.src.startsWith('data:')) {
+      // Uploaded PPT/PPTX files are raw base64 data — browsers have no built-in
+      // viewer for .ppt/.pptx, so there is nothing to render here.
+      // Real fix: upload to Google Slides and use the "Publish to web" link,
+      // or host the .pptx at a public URL and use Office Online Viewer.
+      const div = document.createElement('div');
+      div.className = 'text-slide';
+      div.style.background = '#0f1117';
+      div.style.color = '#ffb84f';
+      div.style.fontSize = '28px';
+      div.style.flexDirection = 'column';
+      div.style.gap = '10px';
+      div.innerHTML = `<div>⚠ Cannot preview "${slide.name}"</div><div style="font-size:16px;color:#7b82a8;">Uploaded PPT files need a Google Slides "Publish to web" link (or a public .pptx URL) to display here.</div>`;
+      frag.appendChild(div);
+    } else {
+      const iframe = document.createElement('iframe');
+      iframe.src = pptToEmbed(slide.src);
+      iframe.setAttribute('allow', 'autoplay; fullscreen');
+      iframe.setAttribute('allowfullscreen', '');
+      frag.appendChild(iframe);
+    }
 
   } else if (slide.type === 'web' || slide.type === 'excel' || slide.type === 'word') {
     if (slide.src && slide.src.startsWith('data:')) {
