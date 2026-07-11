@@ -128,6 +128,10 @@
     font-size: 14px; font-weight: 600; letter-spacing: .3px;
     will-change: transform;
   }
+  @keyframes tickerScroll {
+    from { transform: translateX(0); }
+    to { transform: translateX(var(--ticker-distance, 0)); }
+  }
 
   /* ── OVERLAYS ── */
   .overlay {
@@ -702,17 +706,13 @@ function stopProgress() {
   document.getElementById('progressFill').style.width = '0%';
 }
 
-// ── TICKER ──
-let tickerRAF = null;
-let tickerPos = 0;
-let tickerSpeed = 1;
-let tickerContentWidth = 0;
-
+// ── TICKER (CSS-driven — no continuous JS loop, easier on weak TV hardware) ──
 function applyTicker(ticker) {
   const bar = document.getElementById('tickerBar');
   const inner = document.getElementById('tickerInner');
 
-  if (tickerRAF) { cancelAnimationFrame(tickerRAF); tickerRAF = null; }
+  inner.style.animation = 'none';
+  inner.style.transform = 'translateX(0)';
 
   if (!ticker || !ticker.enabled || !ticker.text) {
     bar.style.display = 'none'; return;
@@ -726,20 +726,14 @@ function applyTicker(ticker) {
   const repeated = (ticker.text + sep).repeat(6);
   inner.textContent = repeated + repeated;
 
-  const speedMap = [0.15, 0.4, 0.8, 1.6, 2.8];
-  tickerSpeed = speedMap[(ticker.speed || 3) - 1];
-  tickerPos = 0;
+  const speedMap = [0.15, 0.4, 0.8, 1.6, 2.8];   // px per frame at 60fps, kept same feel as before
+  const pxPerSecond = speedMap[(ticker.speed || 3) - 1] * 60;
 
   requestAnimationFrame(() => {
-    tickerContentWidth = inner.scrollWidth / 2; 
-    inner.style.transform = 'translateX(0px)';
-    function animateTicker() {
-      tickerPos -= tickerSpeed;
-      if (Math.abs(tickerPos) >= tickerContentWidth) tickerPos = 0;
-      inner.style.transform = `translateX(${tickerPos}px)`;
-      tickerRAF = requestAnimationFrame(animateTicker);
-    }
-    tickerRAF = requestAnimationFrame(animateTicker);
+    const distance = inner.scrollWidth / 2;
+    const durationSec = distance / pxPerSecond;
+    inner.style.setProperty('--ticker-distance', `-${distance}px`);
+    inner.style.animation = `tickerScroll ${durationSec}s linear infinite`;
   });
 }
 
